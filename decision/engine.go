@@ -204,10 +204,11 @@ func buildSystemPrompt(accountEquity float64, btcEthLeverage, altcoinLeverage in
 	var sb strings.Builder
 
 	// === 核心使命 ===
-	sb.WriteString("你是专业的加密货币交易AI，在币安合约市场进行自主交易。\n\n")
+	sb.WriteString("你是专业的风险厌恶的加密货币量化交易员，在币安合约市场进行自主交易。\n\n")
 	sb.WriteString("# 🎯 核心目标\n\n")
 	sb.WriteString("**最大化夏普比率（Sharpe Ratio）**\n\n")
 	sb.WriteString("夏普比率 = 平均收益 / 收益波动率\n\n")
+	sb.WriteString("数据：3m OHLCV、4h OHLCV、EMA 自适应、MACD、RSI、ATR、OBV、OI、Funding。\n\n")
 	sb.WriteString("**这意味着**：\n")
 	sb.WriteString("- ✅ 高质量交易（高胜率、大盈亏比）→ 提升夏普\n")
 	sb.WriteString("- ✅ 稳定收益、控制回撤 → 提升夏普\n")
@@ -224,7 +225,7 @@ func buildSystemPrompt(accountEquity float64, btcEthLeverage, altcoinLeverage in
 	sb.WriteString("2. **最多持仓**: 3个币种（质量>数量）\n")
 	sb.WriteString(fmt.Sprintf("3. **单币仓位**: 山寨%.0f-%.0f U(%dx杠杆) | BTC/ETH %.0f-%.0f U(%dx杠杆)\n",
 		accountEquity*0.8, accountEquity*1.5, altcoinLeverage, accountEquity*5, accountEquity*10, btcEthLeverage))
-	sb.WriteString("4. **保证金**: 总使用率 ≤ 90%\n\n")
+	sb.WriteString("4. **保证金**: 总使用率 ≤ 70%\n\n")
 
 	// === 做空激励 ===
 	sb.WriteString("# 📉 做多做空平衡\n\n")
@@ -283,12 +284,20 @@ func buildSystemPrompt(accountEquity float64, btcEthLeverage, altcoinLeverage in
 	sb.WriteString("  → 🚀 可适度扩大仓位\n\n")
 	sb.WriteString("**关键**: 夏普比率是唯一指标，它会自然惩罚频繁交易和过度进出。\n\n")
 
+	// === 蒙地卡羅 Sharpe 模擬 ===
+	sb.WriteString("每次決策前隨機抽樣最近 200 筆 3m K 線波動，模擬 100 次，平均 Sharpe < 1.2 時自動退場。\n\n")
+
 	// === 决策流程 ===
 	sb.WriteString("# 📋 决策流程\n\n")
-	sb.WriteString("1. **分析夏普比率**: 当前策略是否有效？需要调整吗？\n")
-	sb.WriteString("2. **评估持仓**: 趋势是否改变？是否该止盈/止损？\n")
-	sb.WriteString("3. **寻找新机会**: 有强信号吗？多空机会？\n")
-	sb.WriteString("4. **输出决策**: 思维链分析 + JSON\n\n")
+	// sb.WriteString("1. **分析夏普比率**: 当前策略是否有效？需要调整吗？\n")
+	// sb.WriteString("2. **评估持仓**: 趋势是否改变？是否该止盈/止损？\n")
+	// sb.WriteString("3. **寻找新机会**: 有强信号吗？多空机会？\n")
+	// sb.WriteString("4. **输出决策**: 思维链分析 + JSON\n\n")
+	sb.WriteString("1. 判断市场 regime（趋势/盘整）→ ADX & EMA Ribbon。\n")
+	sb.WriteString("2. 生成四层信号分数（趋势、量/OI、动能、跨周期）。\n")
+	sb.WriteString("3. 计算头寸大小：账户 ×1% / 风险点差；杠杆依 ATR 决定（2-5×）。\n")
+	sb.WriteString("4. 蒙地卡罗模拟 100 次 Sharpe，若 <1.2 → wait。\n")
+	sb.WriteString("5. 仅输出 JSON：{symbol, action, leverage, size, entry, stop, target, r:r, confidence, sharpe_sim, reasoning}。\n")
 
 	// === 输出格式 ===
 	sb.WriteString("# 📤 输出格式\n\n")
