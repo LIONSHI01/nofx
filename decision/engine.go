@@ -201,15 +201,62 @@ func calculateMaxCandidates(ctx *Context) int {
 	return len(ctx.CandidateCoins)
 }
 
+// findSystemPromptFile 查找系统提示词文件，尝试多个可能的位置
+func findSystemPromptFile() (string, error) {
+	filename := "system_prompt.txt"
+	
+	// 可能的文件路径列表
+	possiblePaths := []string{
+		// 1. 当前工作目录下的相对路径
+		filepath.Join("prompts", filename),
+		// 2. 可执行文件所在目录下的相对路径
+		filepath.Join(getExecutableDir(), "prompts", filename),
+		// 3. 可执行文件所在目录的父目录（如果是编译后移动到其他位置）
+		filepath.Join(getExecutableDir(), "..", "prompts", filename),
+		// 4. 如果从项目根目录运行
+		filename,
+		filepath.Join(".", "prompts", filename),
+	}
+
+	// 尝试每个路径
+	for _, path := range possiblePaths {
+		absPath, err := filepath.Abs(path)
+		if err != nil {
+			continue
+		}
+		if _, err := os.Stat(absPath); err == nil {
+			return absPath, nil
+		}
+	}
+
+	return "", fmt.Errorf("未找到文件 system_prompt.txt")
+}
+
+// getExecutableDir 获取可执行文件所在目录
+func getExecutableDir() string {
+	execPath, err := os.Executable()
+	if err != nil {
+		return "."
+	}
+	return filepath.Dir(execPath)
+}
+
 // buildSystemPrompt 构建 System Prompt（固定规则，可缓存）
 func buildSystemPrompt(accountEquity float64, btcEthLeverage, altcoinLeverage int) string {
-	// 读取系统提示词模板文件
-	promptPath := filepath.Join("prompts", "system_prompt.txt")
+	// 查找系统提示词模板文件
+	promptPath, err := findSystemPromptFile()
+	if err != nil {
+		log.Printf("⚠️  无法找到系统提示词文件: %v，使用默认提示词", err)
+		return buildDefaultSystemPrompt(accountEquity, btcEthLeverage, altcoinLeverage)
+	}
+
 	templateBytes, err := os.ReadFile(promptPath)
 	if err != nil {
 		log.Printf("⚠️  无法读取系统提示词文件 %s: %v，使用默认提示词", promptPath, err)
 		return buildDefaultSystemPrompt(accountEquity, btcEthLeverage, altcoinLeverage)
 	}
+
+	log.Printf("✓ 成功加载系统提示词文件: %s", promptPath)
 
 	template := string(templateBytes)
 
