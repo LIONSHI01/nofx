@@ -7,6 +7,8 @@ import (
 	"nofx/market"
 	"nofx/mcp"
 	"nofx/pool"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 )
@@ -201,125 +203,47 @@ func calculateMaxCandidates(ctx *Context) int {
 
 // buildSystemPrompt 构建 System Prompt（固定规则，可缓存）
 func buildSystemPrompt(accountEquity float64, btcEthLeverage, altcoinLeverage int) string {
+	// 读取系统提示词模板文件
+	promptPath := filepath.Join("prompts", "system_prompt.txt")
+	templateBytes, err := os.ReadFile(promptPath)
+	if err != nil {
+		log.Printf("⚠️  无法读取系统提示词文件 %s: %v，使用默认提示词", promptPath, err)
+		return buildDefaultSystemPrompt(accountEquity, btcEthLeverage, altcoinLeverage)
+	}
+
+	template := string(templateBytes)
+
+	// 计算动态参数
+	altcoinMin := accountEquity * 0.8
+	altcoinMax := accountEquity * 1.5
+	btcethMin := accountEquity * 5
+	btcethMax := accountEquity * 10
+	exampleSize := accountEquity * 5
+
+	// 替换占位符
+	replacements := map[string]string{
+		"{ALTCOIN_MIN}":      fmt.Sprintf("%.0f", altcoinMin),
+		"{ALTCOIN_MAX}":      fmt.Sprintf("%.0f", altcoinMax),
+		"{BTCETH_MIN}":       fmt.Sprintf("%.0f", btcethMin),
+		"{BTCETH_MAX}":       fmt.Sprintf("%.0f", btcethMax),
+		"{ALTCOIN_LEVERAGE}": fmt.Sprintf("%d", altcoinLeverage),
+		"{BTCETH_LEVERAGE}":  fmt.Sprintf("%d", btcEthLeverage),
+		"{EXAMPLE_SIZE}":     fmt.Sprintf("%.0f", exampleSize),
+	}
+
+	result := template
+	for placeholder, value := range replacements {
+		result = strings.ReplaceAll(result, placeholder, value)
+	}
+
+	return result
+}
+
+// buildDefaultSystemPrompt 默认系统提示词（当文件读取失败时使用）
+func buildDefaultSystemPrompt(accountEquity float64, btcEthLeverage, altcoinLeverage int) string {
 	var sb strings.Builder
-
-	// === 核心使命 ===
-	sb.WriteString("你是专业的风险厌恶的加密货币量化交易员，在币安合约市场进行自主交易。\n\n")
-	sb.WriteString("# 🎯 核心目标\n\n")
-	sb.WriteString("**最大化夏普比率（Sharpe Ratio）**\n\n")
-	sb.WriteString("夏普比率 = 平均收益 / 收益波动率\n\n")
-	sb.WriteString("数据：3m OHLCV、4h OHLCV、EMA 自适应、MACD、RSI、ATR、OBV、OI、Funding。\n\n")
-	sb.WriteString("**这意味着**：\n")
-	sb.WriteString("- ✅ 高质量交易（高胜率、大盈亏比）→ 提升夏普\n")
-	sb.WriteString("- ✅ 稳定收益、控制回撤 → 提升夏普\n")
-	sb.WriteString("- ✅ 耐心持仓、让利润奔跑 → 提升夏普\n")
-	sb.WriteString("- ❌ 频繁交易、小盈小亏 → 增加波动，严重降低夏普\n")
-	sb.WriteString("- ❌ 过度交易、手续费损耗 → 直接亏损\n")
-	sb.WriteString("- ❌ 过早平仓、频繁进出 → 错失大行情\n\n")
-	sb.WriteString("**关键认知**: 系统每3分钟扫描一次，但不意味着每次都要交易！\n")
-	sb.WriteString("大多数时候应该是 `wait` 或 `hold`，只在极佳机会时才开仓。\n\n")
-
-	// === 硬约束（风险控制）===
-	sb.WriteString("# ⚖️ 硬约束（风险控制）\n\n")
-	sb.WriteString("1. **风险回报比**: 必须 ≥ 1:3（冒1%风险，赚3%+收益）\n")
-	sb.WriteString("2. **最多持仓**: 3个币种（质量>数量）\n")
-	sb.WriteString(fmt.Sprintf("3. **单币仓位**: 山寨%.0f-%.0f U(%dx杠杆) | BTC/ETH %.0f-%.0f U(%dx杠杆)\n",
-		accountEquity*0.8, accountEquity*1.5, altcoinLeverage, accountEquity*5, accountEquity*10, btcEthLeverage))
-	sb.WriteString("4. **保证金**: 总使用率 ≤ 70%\n\n")
-
-	// === 做空激励 ===
-	sb.WriteString("# 📉 做多做空平衡\n\n")
-	sb.WriteString("**重要**: 下跌趋势做空的利润 = 上涨趋势做多的利润\n\n")
-	sb.WriteString("- 上涨趋势 → 做多\n")
-	sb.WriteString("- 下跌趋势 → 做空\n")
-	sb.WriteString("- 震荡市场 → 观望\n\n")
-
-	// === 交易频率认知 ===
-	sb.WriteString("# ⏱️ 交易频率认知\n\n")
-	sb.WriteString("**量化标准**:\n")
-	sb.WriteString("- 优秀交易员：每天2-4笔 = 每小时0.1-0.2笔\n")
-	sb.WriteString("- 过度交易：每小时>2笔 = 严重问题\n")
-	sb.WriteString("- 最佳节奏：开仓后持有至少30-60分钟\n\n")
-	sb.WriteString("**自查**:\n")
-	sb.WriteString("如果你发现自己每个周期都在交易 → 说明标准太低\n")
-	sb.WriteString("如果你发现持仓<30分钟就平仓 → 说明太急躁\n\n")
-
-	// === 开仓信号强度 ===
-	sb.WriteString("# 🎯 开仓标准（严格）\n\n")
-	sb.WriteString("只在**强信号**时开仓，不确定就观望。\n\n")
-	sb.WriteString("**你拥有的完整数据**：\n")
-	sb.WriteString("- 📊 **原始序列**：3分钟价格序列(MidPrices数组) + 4小时K线序列\n")
-	sb.WriteString("- 📈 **技术序列**：EMA20序列、MACD序列、RSI7序列、RSI14序列\n")
-	sb.WriteString("- 💰 **资金序列**：成交量序列、持仓量(OI)序列、资金费率\n")
-	sb.WriteString("- 🎯 **筛选标记**：AI500评分 / OI_Top排名（如果有标注）\n\n")
-	sb.WriteString("**分析方法**（完全由你自主决定）：\n")
-	sb.WriteString("- 自由运用序列数据，你可以做但不限于趋势分析、形态识别、支撑阻力、技术阻力位、斐波那契、波动带计算\n")
-	sb.WriteString("- 多维度交叉验证（价格+量+OI+指标+序列形态）\n")
-	sb.WriteString("- 用你认为最有效的方法发现高确定性机会\n")
-	sb.WriteString("- 综合信心度 ≥ 75 才开仓\n\n")
-	sb.WriteString("**避免低质量信号**：\n")
-	sb.WriteString("- 单一维度（只看一个指标）\n")
-	sb.WriteString("- 相互矛盾（涨但量萎缩）\n")
-	sb.WriteString("- 横盘震荡\n")
-	sb.WriteString("- 刚平仓不久（<15分钟）\n\n")
-
-	// === 夏普比率自我进化 ===
-	sb.WriteString("# 🧬 夏普比率自我进化\n\n")
-	sb.WriteString("每次你会收到**夏普比率**作为绩效反馈（周期级别）：\n\n")
-	sb.WriteString("**夏普比率 < -0.5** (持续亏损):\n")
-	sb.WriteString("  → 🛑 停止交易，连续观望至少6个周期（18分钟）\n")
-	sb.WriteString("  → 🔍 深度反思：\n")
-	sb.WriteString("     • 交易频率过高？（每小时>2次就是过度）\n")
-	sb.WriteString("     • 持仓时间过短？（<30分钟就是过早平仓）\n")
-	sb.WriteString("     • 信号强度不足？（信心度<75）\n")
-	sb.WriteString("     • 是否在做空？（单边做多是错误的）\n\n")
-	sb.WriteString("**夏普比率 -0.5 ~ 0** (轻微亏损):\n")
-	sb.WriteString("  → ⚠️ 严格控制：只做信心度>80的交易\n")
-	sb.WriteString("  → 减少交易频率：每小时最多1笔新开仓\n")
-	sb.WriteString("  → 耐心持仓：至少持有30分钟以上\n\n")
-	sb.WriteString("**夏普比率 0 ~ 0.7** (正收益):\n")
-	sb.WriteString("  → ✅ 维持当前策略\n\n")
-	sb.WriteString("**夏普比率 > 0.7** (优异表现):\n")
-	sb.WriteString("  → 🚀 可适度扩大仓位\n\n")
-	sb.WriteString("**关键**: 夏普比率是唯一指标，它会自然惩罚频繁交易和过度进出。\n\n")
-
-	// === 蒙地卡羅 Sharpe 模擬 ===
-	sb.WriteString("每次決策前隨機抽樣最近 200 筆 3m K 線波動，模擬 100 次，平均 Sharpe < 1.2 時自動退場。\n\n")
-
-	// === 决策流程 ===
-	sb.WriteString("# 📋 决策流程\n\n")
-	// sb.WriteString("1. **分析夏普比率**: 当前策略是否有效？需要调整吗？\n")
-	// sb.WriteString("2. **评估持仓**: 趋势是否改变？是否该止盈/止损？\n")
-	// sb.WriteString("3. **寻找新机会**: 有强信号吗？多空机会？\n")
-	// sb.WriteString("4. **输出决策**: 思维链分析 + JSON\n\n")
-	sb.WriteString("1. 判断市场 regime（趋势/盘整）→ ADX & EMA Ribbon。\n")
-	sb.WriteString("2. 生成四层信号分数（趋势、量/OI、动能、跨周期）。\n")
-	sb.WriteString("3. 计算头寸大小：账户 ×1% / 风险点差；杠杆依 ATR 决定（2-5×）。\n")
-	sb.WriteString("4. 蒙地卡罗模拟 100 次 Sharpe，若 <1.2 → wait。\n")
-	sb.WriteString("5. 仅输出 JSON：{symbol, action, leverage, size, entry, stop, target, r:r, confidence, sharpe_sim, reasoning}。\n")
-
-	// === 输出格式 ===
-	sb.WriteString("# 📤 输出格式\n\n")
-	sb.WriteString("**第一步: 思维链（纯文本）**\n")
-	sb.WriteString("简洁分析你的思考过程\n\n")
-	sb.WriteString("**第二步: JSON决策数组**\n\n")
-	sb.WriteString("```json\n[\n")
-	sb.WriteString(fmt.Sprintf("  {\"symbol\": \"BTCUSDT\", \"action\": \"open_short\", \"leverage\": %d, \"position_size_usd\": %.0f, \"stop_loss\": 97000, \"take_profit\": 91000, \"confidence\": 85, \"risk_usd\": 300, \"reasoning\": \"下跌趋势+MACD死叉\"},\n", btcEthLeverage, accountEquity*5))
-	sb.WriteString("  {\"symbol\": \"ETHUSDT\", \"action\": \"close_long\", \"reasoning\": \"止盈离场\"}\n")
-	sb.WriteString("]\n```\n\n")
-	sb.WriteString("**字段说明**:\n")
-	sb.WriteString("- `action`: open_long | open_short | close_long | close_short | hold | wait\n")
-	sb.WriteString("- `confidence`: 0-100（开仓建议≥75）\n")
-	sb.WriteString("- 开仓时必填: leverage, position_size_usd, stop_loss, take_profit, confidence, risk_usd, reasoning\n\n")
-
-	// === 关键提醒 ===
-	sb.WriteString("---\n\n")
-	sb.WriteString("**记住**: \n")
-	sb.WriteString("- 目标是夏普比率，不是交易频率\n")
-	sb.WriteString("- 做空 = 做多，都是赚钱工具\n")
-	sb.WriteString("- 宁可错过，不做低质量交易\n")
-	sb.WriteString("- 风险回报比1:3是底线\n")
-
+	sb.WriteString(" ")
+	
 	return sb.String()
 }
 
@@ -419,7 +343,11 @@ func buildUserPrompt(ctx *Context) string {
 	}
 
 	sb.WriteString("---\n\n")
-	sb.WriteString("现在请分析并输出决策（思维链 + JSON）\n")
+	sb.WriteString("## 请输出决策\n\n")
+	sb.WriteString("**格式要求：**\n")
+	sb.WriteString("1. 先输出思维链分析（纯文本）\n")
+	sb.WriteString("2. 然后输出 JSON 决策数组（必须是 `[...]` 数组格式）\n")
+	sb.WriteString("3. 如果无操作，输出: `[{\"symbol\": \"MARKET\", \"action\": \"wait\", \"reasoning\": \"...\"}]`\n\n")
 
 	return sb.String()
 }
@@ -468,30 +396,73 @@ func extractCoTTrace(response string) string {
 
 // extractDecisions 提取JSON决策列表
 func extractDecisions(response string) ([]Decision, error) {
-	// 直接查找JSON数组 - 找第一个完整的JSON数组
+	// 1. 尝试从代码块中提取（```json ... ```）
+	if jsonStart := strings.Index(response, "```json"); jsonStart != -1 {
+		jsonStart += 7 // 跳过 ```json
+		if jsonEnd := strings.Index(response[jsonStart:], "```"); jsonEnd != -1 {
+			response = response[jsonStart : jsonStart+jsonEnd]
+		}
+	} else if jsonStart := strings.Index(response, "```"); jsonStart != -1 {
+		// 尝试普通代码块（```）
+		jsonStart += 3
+		if jsonEnd := strings.Index(response[jsonStart:], "```"); jsonEnd != -1 {
+			response = response[jsonStart : jsonStart+jsonEnd]
+		}
+	}
+	
+	// 2. 查找JSON的开始位置（数组或对象）
 	arrayStart := strings.Index(response, "[")
-	if arrayStart == -1 {
-		return nil, fmt.Errorf("无法找到JSON数组起始")
+	objectStart := strings.Index(response, "{")
+	
+	var jsonContent string
+	
+	// 优先查找数组
+	if arrayStart != -1 && (objectStart == -1 || arrayStart < objectStart) {
+		// 找到数组
+		arrayEnd := findMatchingBracket(response, arrayStart)
+		if arrayEnd == -1 {
+			preview := response[arrayStart:]
+			if len(preview) > 500 {
+				preview = preview[:500] + "..."
+			}
+			return nil, fmt.Errorf("无法找到JSON数组结束\n\n=== JSON数组部分 ===\n%s", preview)
+		}
+		jsonContent = strings.TrimSpace(response[arrayStart : arrayEnd+1])
+	} else if objectStart != -1 {
+		// 找到对象，尝试将其包装成数组
+		objectEnd := findMatchingBrace(response, objectStart)
+		if objectEnd == -1 {
+			preview := response[objectStart:]
+			if len(preview) > 500 {
+				preview = preview[:500] + "..."
+			}
+			return nil, fmt.Errorf("无法找到JSON对象结束\n\n=== JSON对象部分 ===\n%s", preview)
+		}
+		singleObject := strings.TrimSpace(response[objectStart : objectEnd+1])
+		jsonContent = "[" + singleObject + "]" // 包装成数组
+		log.Printf("⚠️  AI返回了单个对象而不是数组，已自动包装")
+	} else {
+		// 既没有找到数组也没有找到对象
+		preview := response
+		if len(preview) > 500 {
+			preview = preview[:500] + "..."
+		}
+		return nil, fmt.Errorf("无法找到JSON数组或对象起始\n\n=== AI响应预览 ===\n%s", preview)
 	}
 
-	// 从 [ 开始，匹配括号找到对应的 ]
-	arrayEnd := findMatchingBracket(response, arrayStart)
-	if arrayEnd == -1 {
-		return nil, fmt.Errorf("无法找到JSON数组结束")
-	}
-
-	jsonContent := strings.TrimSpace(response[arrayStart : arrayEnd+1])
-
-	// 🔧 修复常见的JSON格式错误：缺少引号的字段值
-	// 匹配: "reasoning": 内容"}  或  "reasoning": 内容}  (没有引号)
-	// 修复为: "reasoning": "内容"}
-	// 使用简单的字符串扫描而不是正则表达式
+	// 3. 🔧 修复常见的JSON格式错误
 	jsonContent = fixMissingQuotes(jsonContent)
 
-	// 解析JSON
+	// 4. 解析JSON
 	var decisions []Decision
 	if err := json.Unmarshal([]byte(jsonContent), &decisions); err != nil {
-		return nil, fmt.Errorf("JSON解析失败: %w\nJSON内容: %s", err, jsonContent)
+		// 尝试解析为字符串数组（AI可能返回了错误格式）
+		var strArray []string
+		if err2 := json.Unmarshal([]byte(jsonContent), &strArray); err2 == nil {
+			return nil, fmt.Errorf("AI返回了字符串数组而不是决策对象数组\n字符串内容: %v\n\n请检查AI是否按照正确格式输出（应该是包含symbol、action等字段的对象数组）", strArray)
+		}
+		
+		return nil, fmt.Errorf("JSON解析失败: %w\n\n=== JSON内容 ===\n%s\n\n💡 提示：请确保AI输出的JSON包含以下字段：symbol, action, leverage, position_size_usd, stop_loss, take_profit, confidence, reasoning", err, jsonContent)
 	}
 
 	return decisions, nil
@@ -531,6 +502,52 @@ func findMatchingBracket(s string, start int) int {
 			depth--
 			if depth == 0 {
 				return i
+			}
+		}
+	}
+
+	return -1
+}
+
+// findMatchingBrace 查找匹配的右大括号
+func findMatchingBrace(s string, start int) int {
+	if start >= len(s) || s[start] != '{' {
+		return -1
+	}
+
+	depth := 0
+	inString := false
+	escape := false
+	
+	for i := start; i < len(s); i++ {
+		c := s[i]
+		
+		// 处理字符串中的引号
+		if escape {
+			escape = false
+			continue
+		}
+		
+		if c == '\\' {
+			escape = true
+			continue
+		}
+		
+		if c == '"' {
+			inString = !inString
+			continue
+		}
+		
+		// 只在非字符串内计数大括号
+		if !inString {
+			switch c {
+			case '{':
+				depth++
+			case '}':
+				depth--
+				if depth == 0 {
+					return i
+				}
 			}
 		}
 	}
